@@ -22,7 +22,7 @@ time for log to be full >= log_size / n_ops_x_sec = LOG_SIZE / ( 1 / PROD_TIME +
 >> !! MAXIMUM TIME FOR MONITOR REFRESH : LOG_SIZE / ( 1 / PROD_TIME + N_CONSUMERS / MIN_CONS_TIME ) !! <<
 */
 #define MAX_MONITOR_TIME LOG_SIZE / ( 1 / PROD_TIME + N_CONSUMERS / MIN_CONS_TIME )
-#define MONITOR_TIME MAX_MONITOR_TIME / 3
+#define MONITOR_TIME 0.1
 
 /* ====================================================== */
 /* ============= PRODUCER/CONSUMER DYNAMICS ============= */
@@ -43,8 +43,8 @@ char transaction_log[LOG_SIZE];
 size_t log_idx = 0, log_idx_monitor = 0;
 
 // write
-int queue_size = 0, produced_messages = 0;
-int recieved_messages[N_CONSUMERS];
+int queue_size = 0;
+long recieved_messages[N_CONSUMERS], produced_messages = 0;
 pthread_mutex_t monitor_mutex;
 
 /* ====================================================== */
@@ -77,10 +77,34 @@ static void print_transaction_log() {
 
 static void print_monitor() {
 
-    printf("Queue size: %4d - #P: %4d", queue_size, produced_messages);
-    for (size_t t = 0; t < N_CONSUMERS; t++) printf(" - #C%d: %4d", (int)t, recieved_messages[t]);
+    printf("Queue size: %4d - #P: %4ld", queue_size, produced_messages);
+    for (size_t t = 0; t < N_CONSUMERS; t++) printf(" - #C%d: %4ld", (int)t, recieved_messages[t]);
     printf("\n");
     
+}
+
+void graceful_exit(const int signum) {
+    
+    pthread_mutex_lock(&queue_mutex);                                                               // block the producer and all consumers
+
+    pthread_mutex_lock(&monitor_mutex);                                                             // give a last look to the monitor
+    while (log_idx_monitor != log_idx) {
+        switch (transaction_log[log_idx_monitor]) {
+            case 'P':
+                produced_messages++;
+                break;
+            default:
+                recieved_messages[(size_t)(transaction_log[log_idx_monitor]-'0')]++;
+                break;
+        }
+        log_idx_monitor = (log_idx_monitor + 1) % LOG_SIZE;
+    }
+    queue_size = num_elem;
+    pthread_mutex_unlock(&monitor_mutex);
+    print_monitor();
+
+    exit(0);
+
 }
 
 /* ====================================================== */
@@ -113,6 +137,8 @@ static void* consumer(void* arg) {
         consumer_work();
 
     }
+
+    return NULL;
     
 }
 
@@ -147,6 +173,8 @@ static void* producer(void* arg) {
         item++;
 
     }
+
+    return NULL;
     
 }
 
@@ -180,17 +208,22 @@ static void* monitor(void* arg) {
 
     }
 
+    return NULL;
+
 }
 
 /* ====================================================== */
-/* ==================== TSP/IP SERVER =================== */
+/* ==================== TCP/IP SERVER =================== */
 /* ====================================================== */
 // TODO
 
 /* ====================================================== */
 /* ======================== MAIN ======================== */
 /* ====================================================== */
+
 int main(int argc, char* args[]) {
+
+    signal(SIGINT, graceful_exit);
 
     pthread_mutex_init(&queue_mutex, NULL);
     pthread_cond_init(&can_produce, NULL);
