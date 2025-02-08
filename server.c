@@ -89,6 +89,20 @@ static void monitor_wait() {
     usleep(MONITOR_TIME * 1000000); 
 }
 
+static int receive(int sd, char *retBuf, int size)
+{
+    int totSize, currSize;
+    totSize = 0;
+    while(totSize < size)
+    {
+        currSize = recv(sd, &retBuf[totSize], size - totSize, 0);
+        if(currSize <= 0)
+            return -1;
+        totSize += currSize;
+    }
+    return 0;
+}
+
 static void print_transaction_log() {
     for (size_t t = 0; t < LOG_SIZE; t++) {
         if (log_idx < log_idx_monitor) {
@@ -312,6 +326,15 @@ void* client_handler(void* arg) {
     char buffer[TCP_BUFFER_SIZE];
 
     while (server_running && client->active) {
+
+        //sending to check if connection is closed is a dangerous behaviour
+        //if socket connection is closed, server receives terminator like 
+        //END_OF_FILE, so recv return 0. Receive is a function to read all input in the buffer
+        //man recv for further information
+        if(receive(client->socket, buffer, strlen(buffer))) {
+            break;
+        }
+
         pthread_mutex_lock(&monitor_mutex);
         int offset = 27;
         snprintf(buffer, TCP_BUFFER_SIZE, "Queue size: %4d - #P: %4ld", queue_size, produced_messages);
