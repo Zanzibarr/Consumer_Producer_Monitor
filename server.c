@@ -15,6 +15,11 @@ volatile sig_atomic_t server_running = TRUE;
 volatile sig_atomic_t cleanup_in_progress = FALSE;
 
 
+
+
+
+
+
 /* ##################################################################### */
 /* ################# PRODUCER/CONSUMER/MONITOR DYNAMICS ################ */
 /* ##################################################################### */
@@ -40,7 +45,7 @@ time for log to be full >= log_size / n_ops_x_sec = LOG_SIZE / ( 1 / PROD_TIME +
 #define MONITOR_TIME MAX_MONITOR_TIME / 3
 
 // Producer/Consumer
-int buffer[PROD_QUEUE_SIZE];
+int p_c_buffer[PROD_QUEUE_SIZE];
 size_t read_id = 0;
 size_t write_id = 0;
 size_t num_elem = 0;
@@ -131,13 +136,15 @@ static void* consumer(void* arg) {
         }
 
         // read item
-        item = buffer[read_id];
+        item = p_c_buffer[read_id];
         read_id = (read_id + 1) % PROD_QUEUE_SIZE;
         num_elem--;
 
         // log transaction
         transaction_log[log_idx] = (int)*consumer_name + '0';
         log_idx = (log_idx + 1) % LOG_SIZE;
+
+        // print_transaction_log();
 
         // free resources
         pthread_cond_signal(&can_produce);
@@ -178,13 +185,15 @@ static void* producer(void* arg) {
         }
 
         // write produced item
-        buffer[write_id] = item;
+        p_c_buffer[write_id] = item;
         write_id = (write_id + 1) % PROD_QUEUE_SIZE;
         num_elem++;
 
         // log transaction
         transaction_log[log_idx] = 'P';
         log_idx = (log_idx + 1) % LOG_SIZE;
+
+        // print_transaction_log();
 
         // free resources
         pthread_cond_signal(&can_digest);
@@ -236,6 +245,8 @@ static void* monitor(void* arg) {
         // monitor is updated
         pthread_mutex_unlock(&monitor_mutex);
 
+        // print_monitor();
+
         // wait MONITOR_TIME seconds before updating
         if (server_running) monitor_wait();
 
@@ -246,6 +257,11 @@ static void* monitor(void* arg) {
     return NULL;
 
 }
+
+
+
+
+
 
 
 /* ##################################################################### */
@@ -266,43 +282,6 @@ ClientInfo* clients[TCP_MAX_CLIENTS];
 int client_count = 0, tcp_server_socket;
 
 pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-static int check_connection(int client_socket) {
-
-    fd_set read_fds;
-    struct timeval timeout;
-    FD_ZERO(&read_fds);
-    FD_SET(client_socket, &read_fds);
-    
-    // Set timeout for select()
-    timeout.tv_sec = 0;
-    timeout.tv_usec = 1000;   // 1ms timeout
-
-    // wait 1ms to see if client sent something
-    int activity = select(client_socket + 1, &read_fds, NULL, NULL, &timeout);
-
-    if (activity < 0) {
-        perror("select error in checking client-server connection.");
-        return FALSE;
-    } else if (activity == 0) {
-        // Timeout expired, no data received = no shutdown package recieved
-        return TRUE;
-    }
-
-    // Check if the client has disconnected
-    ssize_t bytes_received = recv(client_socket, buffer, sizeof(buffer), 0);
-    if (bytes_received == 0) {
-        // if client sent 0 bytes then the client must have shut down the connection
-        return FALSE;
-    } else if (bytes_received < 0) {
-        perror("recv error in checking client-server connection.");
-        return FALSE;
-    }
-
-    // if client sent something we ignore it and return that the connection is still open
-    return TRUE;
-
-}
 
 // Function to add a client to our tracking array
 void add_client(ClientInfo* client) {
@@ -338,35 +317,71 @@ void remove_client(ClientInfo* client) {
 
 }
 
+static int check_connection(int client_socket) {
+
+    fd_set read_fds;
+    struct timeval timeout;
+    char tcp_buffer[TCP_BUFFER_SIZE];
+    FD_ZERO(&read_fds);
+    FD_SET(client_socket, &read_fds);
+    
+    // Set timeout for select()
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 1000;   // 1ms timeout
+
+    // wait 1ms to see if client sent something
+    int activity = select(client_socket + 1, &read_fds, NULL, NULL, &timeout);
+
+    if (activity < 0) {
+        perror("select error in checking client-server connection.");
+        return FALSE;
+    } else if (activity == 0) {
+        // Timeout expired, no data received = no shutdown package recieved
+        return TRUE;
+    }
+
+    // Check if the client has disconnected
+    ssize_t bytes_received = recv(client_socket, tcp_buffer, sizeof(tcp_buffer), 0);
+    if (bytes_received == 0) {
+        // if client sent 0 bytes then the client must have shut down the connection
+        return FALSE;
+    } else if (bytes_received < 0) {
+        perror("recv error in checking client-server connection.");
+        return FALSE;
+    }
+
+    // if client sent something we ignore it and return that the connection is still open
+    return TRUE;
+
+}
+
 void* client_handler(void* arg) {
 
     ClientInfo* client = (ClientInfo*)arg;
-    char buffer[TCP_BUFFER_SIZE];
+    char tcp_buffer[TCP_BUFFER_SIZE];
 
     while (server_running && client->active) {
 
-        // sending to check if connection is closed
-        // if socket connection is closed, server receives terminator like
-        // END_OF_FILE, so recv return 0. Receive is a function to read all input in the buffer
-        // man recv for further information
-        // if (receive(client->socket, buffer, strlen(buffer)) != 0) break;
+        // check if the client has closed the connection
         if (!check_connection(client -> socket)) break;
 
-        // read the monitor
+        // mutual exclusion
         pthread_mutex_lock(&monitor_mutex);
 
+        // read the monitor
         int offset = 27;
-        snprintf(buffer, TCP_BUFFER_SIZE, "Queue size: %4d - #P: %4ld", monitor_info.queue_size, monitor_info.produced_messages);
+        snprintf(tcp_buffer, TCP_BUFFER_SIZE, "Queue size: %4d - #P: %4ld", monitor_info.queue_size, monitor_info.produced_messages);
         for (size_t t = 0; t < N_CONSUMERS; t++) {
-            snprintf(buffer + offset, TCP_BUFFER_SIZE - offset, " - #C%1d: %4ld", (int)t, monitor_info.recieved_messages[t]);
+            snprintf(tcp_buffer + offset, TCP_BUFFER_SIZE - offset, " - #C%1d: %4ld", (int)t, monitor_info.recieved_messages[t]);
             offset += 12;
         }
-        snprintf(buffer + offset, TCP_BUFFER_SIZE - offset, "\n");
+        snprintf(tcp_buffer + offset, TCP_BUFFER_SIZE - offset, "\n");
 
+        // free resources
         pthread_mutex_unlock(&monitor_mutex);
 
         // send monitor info to client
-        ssize_t bytes_sent = send(client->socket, buffer, strlen(buffer), 0);
+        ssize_t bytes_sent = send(client->socket, tcp_buffer, strlen(tcp_buffer), 0);
         if (bytes_sent <= 0) {
             client->active = FALSE;
             break;
@@ -494,6 +509,12 @@ static void* tcp_server(void* arg) {
 
 }
 
+
+
+
+
+
+
 /* ##################################################################### */
 /* ######################## TERMINATION HANDLER ######################## */
 /* ##################################################################### */
@@ -540,6 +561,12 @@ void graceful_exit(const int signum) {
     exit(0);
 
 }
+
+
+
+
+
+
 
 /* ##################################################################### */
 /* ################################ MAIN ############################### */
