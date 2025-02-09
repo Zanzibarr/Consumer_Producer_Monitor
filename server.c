@@ -14,6 +14,9 @@
 volatile sig_atomic_t server_running = TRUE;
 volatile sig_atomic_t cleanup_in_progress = FALSE;
 
+// small atomic operations
+pthread_mutex_t atomic_op;
+
 
 /* ##################################################################### */
 /* ################# PRODUCER/CONSUMER/MONITOR DYNAMICS ################ */
@@ -36,8 +39,8 @@ time for log to be full >= log_size / n_ops_x_sec = LOG_SIZE / ( 1 / PROD_TIME +
 
 >> !! MAXIMUM TIME FOR MONITOR REFRESH : LOG_SIZE / ( 1 / PROD_TIME + N_CONSUMERS / MIN_CONS_TIME ) !! <<
 */
-#define MAX_MONITOR_TIME LOG_SIZE / (1 / PROD_TIME + N_CONSUMERS / MIN_CONS_TIME)
-#define MONITOR_TIME MAX_MONITOR_TIME / 3
+#define MAX_MONITOR_TIME (LOG_SIZE / (1 / PROD_TIME + N_CONSUMERS / MIN_CONS_TIME))
+#define MONITOR_TIME (MAX_MONITOR_TIME / 3)
 
 // Producer/Consumer
 int p_c_buffer[PROD_QUEUE_SIZE];
@@ -102,6 +105,8 @@ static void print_monitor() {
 }
 
 void update_monitor_status() { monitor_info.updated_switch = monitor_info.updated_switch ? FALSE : TRUE; }
+
+// exits only when the monitor changes its switch variable (wait till new info are in the monitor)
 void wait_monitor_update() {
     int monitor_status = monitor_info.updated_switch;
     while (monitor_status == monitor_info.updated_switch) usleep(100000);   // sleep for 0.1 seconds
@@ -122,9 +127,9 @@ static void* consumer(void* arg) {
 
         // mutual exclusion
         pthread_mutex_lock(&queue_mutex);
-
         while (read_id == write_id && server_running) pthread_cond_wait(&can_digest, &queue_mutex);
 
+        // graceful exit
         if (!server_running) {
             pthread_mutex_unlock(&queue_mutex);
             break;
@@ -137,7 +142,9 @@ static void* consumer(void* arg) {
 
         // log transaction
         transaction_log[log_idx] = (int)*consumer_name + '0';
+        pthread_mutex_lock(&atomic_op);
         log_idx = (log_idx + 1) % LOG_SIZE;
+        pthread_mutex_unlock(&atomic_op);
 
         // print_transaction_log();
 
@@ -174,6 +181,7 @@ static void* producer(void* arg) {
         pthread_mutex_lock(&queue_mutex);
         while ((write_id + 1) % PROD_QUEUE_SIZE == read_id && server_running) pthread_cond_wait(&can_produce, &queue_mutex);
 
+        // graceful exit
         if (!server_running) {
             pthread_mutex_unlock(&queue_mutex);
             break;
@@ -186,7 +194,9 @@ static void* producer(void* arg) {
 
         // log transaction
         transaction_log[log_idx] = 'P';
+        pthread_mutex_lock(&atomic_op);
         log_idx = (log_idx + 1) % LOG_SIZE;
+        pthread_mutex_unlock(&atomic_op);
 
         // print_transaction_log();
 
@@ -223,7 +233,10 @@ static void* monitor(void* arg) {
         // 1) log_idx_monitor != log_idx: the monitor didn't read all the info we got at this moment, keep reading
         //      - note that log_idx could've been updated during a past iteration, hence we can read that info too (important the order in which we store a new transaction and increase log_idx...)
         // 2) log_idx_monitor == log_idx: we've read the last written transaction
-        while (log_idx_monitor != log_idx) {
+        pthread_mutex_lock(&atomic_op);                     // assure that the log_idx is the "right" value (it's update is complete)
+        int missing_info = log_idx_monitor != log_idx;
+        pthread_mutex_unlock(&atomic_op);
+        while (missing_info) {
             switch (transaction_log[log_idx_monitor]) {
                 case 'P':
                     monitor_info.produced_messages++;
@@ -259,7 +272,7 @@ static void* monitor(void* arg) {
 /* ##################################################################### */
 
 #define TCP_PORT 9999
-#define TCP_MAX_CLIENTS 1
+#define TCP_MAX_CLIENTS 5
 #define TCP_BUFFER_SIZE 500
 
 typedef struct {
@@ -561,6 +574,7 @@ int main(int argc, char *args[]) {
     pthread_cond_init(&can_produce, NULL);
     pthread_cond_init(&can_digest, NULL);
     pthread_mutex_init(&monitor_mutex, NULL);
+    pthread_mutex_init(&atomic_op, NULL);
 
     // create a thread for each partecipant
     pthread_create(&producer_thread, NULL, producer, NULL);
