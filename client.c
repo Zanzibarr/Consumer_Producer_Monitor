@@ -9,8 +9,8 @@
 #define PORT 9999
 #define BUFFER_SIZE 500
 
-#define FALSE 0
 #define TRUE 1
+#define FALSE 0
 
 int client_socket;
 volatile sig_atomic_t close_connection = FALSE;

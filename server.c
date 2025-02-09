@@ -554,12 +554,6 @@ void graceful_exit(const int signum) {
     pthread_cond_broadcast(&can_produce);
     pthread_cond_broadcast(&can_digest);
 
-    sleep(2);
-
-    printf("Shutdown complete.\n");
-
-    exit(0);
-
 }
 
 
@@ -594,12 +588,14 @@ int main(int argc, char *args[]) {
     pthread_create(&monitor_thread, NULL, monitor, NULL);
     pthread_create(&tcpserver_thread, NULL, tcp_server, NULL);
 
-    // join threads (we never get here)
+    // join threads
     pthread_join(producer_thread, NULL);
     for (size_t t = 0; t < N_CONSUMERS; t++)
         pthread_join(consumer_threads[t], NULL);
     pthread_join(monitor_thread, NULL);
     pthread_join(tcpserver_thread, NULL);
+
+    printf("Shutdown complete.\n");
 
     return 0;
 
