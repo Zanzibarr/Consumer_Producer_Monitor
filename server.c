@@ -15,11 +15,6 @@ volatile sig_atomic_t server_running = TRUE;
 volatile sig_atomic_t cleanup_in_progress = FALSE;
 
 
-
-
-
-
-
 /* ##################################################################### */
 /* ################# PRODUCER/CONSUMER/MONITOR DYNAMICS ################ */
 /* ##################################################################### */
@@ -259,17 +254,12 @@ static void* monitor(void* arg) {
 }
 
 
-
-
-
-
-
 /* ##################################################################### */
 /* ########################### TCP/IP SERVER ########################### */
 /* ##################################################################### */
 
 #define TCP_PORT 9999
-#define TCP_MAX_CLIENTS 5
+#define TCP_MAX_CLIENTS 1
 #define TCP_BUFFER_SIZE 500
 
 typedef struct {
@@ -408,7 +398,7 @@ static void* tcp_server(void* arg) {
 
     // Create socket
     if ((tcp_server_socket = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
-        perror("Socket failed");
+        perror("socket failed");
         exit(1);
     }
 
@@ -470,7 +460,10 @@ static void* tcp_server(void* arg) {
 
         // Check if we can accept more clients
         if (client_count >= TCP_MAX_CLIENTS) {
-            printf("Maximum clients reached. Rejecting new connection.\n");
+            printf("Maximum clients reached (%d). Rejecting new connection.\n", TCP_MAX_CLIENTS);
+            // Send rejection message to client before closing
+            const char* rejection_msg = "CONNECTION_REJECTED:Maximum number of clients reached. Please try again later.\n";
+            send(client_socket, rejection_msg, strlen(rejection_msg), 0);
             close(client_socket);
             continue;
         }
@@ -508,11 +501,6 @@ static void* tcp_server(void* arg) {
     return NULL;
 
 }
-
-
-
-
-
 
 
 /* ##################################################################### */
@@ -555,11 +543,6 @@ void graceful_exit(const int signum) {
     pthread_cond_broadcast(&can_digest);
 
 }
-
-
-
-
-
 
 
 /* ##################################################################### */

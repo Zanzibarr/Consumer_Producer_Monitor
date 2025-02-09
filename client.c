@@ -24,7 +24,7 @@ void graceful_exit(int signum) {
 }
 
 int main() {
-    
+
     signal(SIGINT, graceful_exit);
 
     struct sockaddr_in server_addr;
@@ -52,7 +52,7 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    printf("Connected to server. Receiving data...\n");
+    int first = TRUE;
 
     // Receive data loop
     while (!close_connection) {
@@ -64,9 +64,18 @@ int main() {
             perror("Receive failed.");
             break;
         } else if (bytes_received == 0 || close_connection) {
-            printf("\nConnection closed.\n");
+            printf("\nServer closed the connection.\n");
             break;
         }
+
+        // Check if this is a rejection message
+        if (strncmp(buffer, "CONNECTION_REJECTED:", 20) == 0) {
+            printf("Connection rejected: %s", buffer + 20);
+            break;
+        }
+
+        if (first) printf("Connected to server. Receiving data...\n");
+        first = FALSE;
 
         printf("%s", buffer);
 
