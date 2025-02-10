@@ -115,7 +115,7 @@ static inline void print_transaction_log() {
 
 }
 
-void update_monitor_status() { monitor_info.updated_switch = monitor_info.updated_switch ? FALSE : TRUE; }
+void update_monitor_status() { monitor_info.updated_switch != monitor_info.updated_switch; }
 
 // exits only when the monitor changes its switch variable (wait till new info are in the monitor)
 void wait_monitor_update() {
@@ -169,6 +169,9 @@ static void* consumer(void* arg) {
 
     // when server is shut down
     printf("Consumer %d shutting down.\n", *((int *)consumer_name));
+
+    pthread_exit(0);
+
     return NULL;
 
 }
@@ -219,6 +222,9 @@ static void* producer(void* arg) {
 
     // when server is shut down
     printf("Producer shutting down.\n");
+
+    pthread_exit(0);
+
     return NULL;
     
 }
@@ -275,6 +281,9 @@ static void* monitor(void* arg) {
 
     // when server is shut down
     printf("Monitor shutting down.\n");
+
+    pthread_exit(0);
+
     return NULL;
 
 }
@@ -405,6 +414,8 @@ static void* client_handler(void* arg) {
     remove_client(client);
     free(client);
 
+    pthread_exit(0);
+
     return NULL;
 
 }
@@ -515,6 +526,8 @@ static void* tcp_server(void* arg) {
     }
 
     printf("TCP server shutting down.\n");
+
+    pthread_exit(0);
 
     return NULL;
 
