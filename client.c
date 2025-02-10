@@ -33,7 +33,7 @@ int main() {
     // Create socket
     if ((client_socket = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
         perror("Socket failed.");
-        exit(EXIT_FAILURE);
+        exit(1);
     }
 
     // Configure server address
@@ -42,14 +42,14 @@ int main() {
     if (inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr) <= 0) {
         perror("Invalid address.");
         close(client_socket);
-        exit(EXIT_FAILURE);
+        exit(1);
     }
 
     // Connect to server
     if (connect(client_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) == -1) {
         perror("Connection failed.");
         close(client_socket);
-        exit(EXIT_FAILURE);
+        exit(1);
     }
 
     int first = TRUE;

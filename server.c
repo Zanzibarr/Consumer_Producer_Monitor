@@ -267,7 +267,7 @@ static void* monitor(void* arg) {
         // tell the clients that the monitor has updated info
         update_monitor_status();
     
-        // monitor is updated
+        // monitor is updated, tell the clients waiting that they can now read updated info
         pthread_mutex_lock(&monitor_mutex);
         active_monitor = FALSE;
         if (waiting_clients > 0) pthread_cond_broadcast(&monitor_done);
@@ -390,7 +390,7 @@ static void* client_handler(void* arg) {
         }
         snprintf(tcp_buffer + offset, TCP_BUFFER_SIZE - offset, "\n");
 
-        // free resources
+        // if there are no active clients, tell the monitor it can work now
         pthread_mutex_lock(&monitor_mutex);
         active_clients--;
         if (active_clients == 0) pthread_cond_signal(&clients_done);
