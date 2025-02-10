@@ -114,7 +114,7 @@ static inline void print_transaction_log() {
 
 }
 
-void update_monitor_status() { monitor_info.updated_switch != monitor_info.updated_switch; }
+void update_monitor_status() { monitor_info.updated_switch = !monitor_info.updated_switch; }
 
 // exits only when the monitor changes its switch variable (wait till new info are in the monitor)
 void wait_monitor_update() {
