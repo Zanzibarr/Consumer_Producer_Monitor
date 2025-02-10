@@ -42,15 +42,23 @@ time for log to be full >= log_size / n_ops_x_sec = LOG_SIZE / ( 1 / PROD_TIME +
 #define MAX_MONITOR_TIME (LOG_SIZE / (1 / PROD_TIME + N_CONSUMERS / MIN_CONS_TIME))
 #define MONITOR_TIME (MAX_MONITOR_TIME / 3)
 
+// I assumed the monitor has no access to the shared memory between producer/consumers (p/c) to consider a more realistic situation
+// For an easier implementation, the log that p/c updates for the monitor is stored in the shared memory
+// In a realistic scenario, the log is updated through Inter Process Communication insthead of it being in shared memory
+// The way the monitor reads the log is the same in both scenarios, the only thing that changes is how the p/c writes on the log (shared memory vs IPC)
+// vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
 // Producer/Consumer
-int p_c_buffer[PROD_QUEUE_SIZE];
-size_t read_id = 0;
-size_t write_id = 0;
-size_t num_elem = 0;
+int pcbuf[PROD_QUEUE_SIZE];
+size_t pcbuf_read_idx = 0;
+size_t pcbuf_write_idx = 0;
+pthread_cond_t can_produce, can_digest;
+pthread_mutex_t queue_mutex;
 
 // Log of transactions for monitor
 char transaction_log[LOG_SIZE];
-size_t log_idx = 0, log_idx_monitor = 0;
+size_t log_write_idx = 0, log_read_idx = 0;
+size_t pcbuf_size = 0;
+// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 // Monitor data
 struct monitor_data {
@@ -60,7 +68,7 @@ struct monitor_data {
     long recieved_messages[N_CONSUMERS];
 } monitor_info = {0,0,0,{0}};
 
-pthread_mutex_t queue_mutex, monitor_mutex;
+pthread_mutex_t monitor_mutex;
 pthread_cond_t can_produce, can_digest;
 
 // consumer works for a random amount of time between MIN_CONS_TIME and MAX_CONS_TIME seconds to consume an item
@@ -76,14 +84,14 @@ static void monitor_wait() { usleep(MONITOR_TIME * 1000000); }
 static void print_transaction_log() {
 
     for (size_t t = 0; t < LOG_SIZE; t++) {
-        if (log_idx < log_idx_monitor) {
-            if (t >= log_idx_monitor || t < log_idx)
+        if (log_write_idx < log_read_idx) {
+            if (t >= log_read_idx || t < log_write_idx)
                 printf("\033[0;37m%c ", (char)transaction_log[t]);
             else
                 printf("\033[1;30m%c ", (char)transaction_log[t]);
         }
         else {
-            if (t >= log_idx_monitor && t < log_idx)
+            if (t >= log_read_idx && t < log_write_idx)
                 printf("\033[0;37m%c ", (char)transaction_log[t]);
             else
                 printf("\033[1;30m%c ", (char)transaction_log[t]);
@@ -116,6 +124,7 @@ void wait_monitor_update() {
 /* ====================== CONSUMER ====================== */
 /* ====================================================== */
 
+// As stated before p/c can communicate to the monitor only through the log or log-related info
 static void* consumer(void* arg) {
 
     size_t* consumer_name = (size_t *)arg;
@@ -127,7 +136,7 @@ static void* consumer(void* arg) {
 
         // mutual exclusion
         pthread_mutex_lock(&queue_mutex);
-        while (read_id == write_id && server_running) pthread_cond_wait(&can_digest, &queue_mutex);
+        while (pcbuf_read_idx == pcbuf_write_idx && server_running) pthread_cond_wait(&can_digest, &queue_mutex);
 
         // graceful exit
         if (!server_running) {
@@ -136,14 +145,14 @@ static void* consumer(void* arg) {
         }
 
         // read item
-        item = p_c_buffer[read_id];
-        read_id = (read_id + 1) % PROD_QUEUE_SIZE;
-        num_elem--;
-
+        item = pcbuf[pcbuf_read_idx];
+        pcbuf_read_idx = (pcbuf_read_idx + 1) % PROD_QUEUE_SIZE;
+        
         // log transaction
-        transaction_log[log_idx] = (int)*consumer_name + '0';
+        transaction_log[log_write_idx] = (int)*consumer_name + '0';
+        pcbuf_size--;
         pthread_mutex_lock(&atomic_op);
-        log_idx = (log_idx + 1) % LOG_SIZE;
+        log_write_idx = (log_write_idx + 1) % LOG_SIZE;
         pthread_mutex_unlock(&atomic_op);
 
         // print_transaction_log();
@@ -167,6 +176,7 @@ static void* consumer(void* arg) {
 /* ====================== PRODUCER ====================== */
 /* ====================================================== */
 
+// As stated before p/c can communicate to the monitor only through the log or log-related info
 static void* producer(void* arg) {
 
     printf("Producer active.\n");
@@ -179,7 +189,7 @@ static void* producer(void* arg) {
 
         // mutual exclusion
         pthread_mutex_lock(&queue_mutex);
-        while ((write_id + 1) % PROD_QUEUE_SIZE == read_id && server_running) pthread_cond_wait(&can_produce, &queue_mutex);
+        while ((pcbuf_write_idx + 1) % PROD_QUEUE_SIZE == pcbuf_read_idx && server_running) pthread_cond_wait(&can_produce, &queue_mutex);
 
         // graceful exit
         if (!server_running) {
@@ -188,14 +198,14 @@ static void* producer(void* arg) {
         }
 
         // write produced item
-        p_c_buffer[write_id] = item;
-        write_id = (write_id + 1) % PROD_QUEUE_SIZE;
-        num_elem++;
-
+        pcbuf[pcbuf_write_idx] = item;
+        pcbuf_write_idx = (pcbuf_write_idx + 1) % PROD_QUEUE_SIZE;
+        
         // log transaction
-        transaction_log[log_idx] = 'P';
+        transaction_log[log_write_idx] = 'P';
+        pcbuf_size++;
         pthread_mutex_lock(&atomic_op);
-        log_idx = (log_idx + 1) % LOG_SIZE;
+        log_write_idx = (log_write_idx + 1) % LOG_SIZE;
         pthread_mutex_unlock(&atomic_op);
 
         // print_transaction_log();
@@ -218,6 +228,7 @@ static void* producer(void* arg) {
 /* ======================= MONITOR ====================== */
 /* ====================================================== */
 
+// As stated before, I assumed the monitor can access only the log and other log-related info
 static void* monitor(void* arg) {
 
     printf("Monitor active.\n");
@@ -229,25 +240,26 @@ static void* monitor(void* arg) {
         pthread_mutex_lock(&monitor_mutex);
     
         // read all new transactions from log
-        // log_idx tells us, at this moment, which is the last transacion stored in the log
-        // 1) log_idx_monitor != log_idx: the monitor didn't read all the info we got at this moment, keep reading
-        //      - note that log_idx could've been updated during a past iteration, hence we can read that info too (important the order in which we store a new transaction and increase log_idx...)
-        // 2) log_idx_monitor == log_idx: we've read the last written transaction
-        pthread_mutex_lock(&atomic_op);                     // assure that the log_idx is the "right" value (it's update is complete)
-        int missing_info = log_idx_monitor != log_idx;
+        // log_write_idx tells us, at this moment, which is the last transacion stored in the log
+        // 1) log_read_idx != log_write_idx: the monitor didn't read all the info we got at this moment, keep reading
+        //      - note that log_write_idx could've been updated during a past iteration, hence we can read that info too (important the order in which we store a new transaction and increase log_write_idx...)
+        // 2) log_read_idx == log_write_idx: we've read the last written transaction
+        pthread_mutex_lock(&atomic_op);                     // assure that the log_write_idx is the "right" value (it's update is complete)
+        int missing_info = log_read_idx != log_write_idx;
         pthread_mutex_unlock(&atomic_op);
         while (missing_info) {
-            switch (transaction_log[log_idx_monitor]) {
+            switch (transaction_log[log_read_idx]) {
                 case 'P':
                     monitor_info.produced_messages++;
                     break;
                 default:
-                    monitor_info.recieved_messages[(size_t)(transaction_log[log_idx_monitor] - '0')]++;
+                    monitor_info.recieved_messages[(size_t)(transaction_log[log_read_idx] - '0')]++;
                     break;
             }
-            log_idx_monitor = (log_idx_monitor + 1) % LOG_SIZE;
+            log_read_idx = (log_read_idx + 1) % LOG_SIZE;
         }
-        monitor_info.queue_size = num_elem;
+        monitor_info.queue_size = pcbuf_size;
+
         update_monitor_status();
     
         // monitor is updated
@@ -371,7 +383,7 @@ void* client_handler(void* arg) {
         // mutual exclusion
         pthread_mutex_lock(&monitor_mutex);
 
-        // read the monitor
+        // read monitor data
         int offset = 27;
         snprintf(tcp_buffer, TCP_BUFFER_SIZE, "Queue size: %4d - #P: %4ld", monitor_info.queue_size, monitor_info.produced_messages);
         for (size_t t = 0; t < N_CONSUMERS; t++) {
