@@ -74,8 +74,10 @@ int main() {
             break;
         }
 
-        if (first) printf("Connected to server. Receiving data...\n");
-        first = FALSE;
+        if (first) {
+            printf("Connected to server. Receiving data...\n");
+            first = FALSE;
+        }
 
         printf("%s", buffer);
 

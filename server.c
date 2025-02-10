@@ -80,7 +80,6 @@ pthread_mutex_t clients_mutex;
 volatile sig_atomic_t server_running = TRUE;
 volatile sig_atomic_t cleanup_in_progress = FALSE;
 
-
 /* ====================================================== */
 /* =================== UTILS FUNCTIONS ================== */
 /* ====================================================== */
